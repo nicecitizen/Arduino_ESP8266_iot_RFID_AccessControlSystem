@@ -1,3 +1,4 @@
+/*v1.02版本更新：增加了舵机在启动时复位成关门状态的改进，并增加开门停留时间*/
 /*
   ① 自动控制时，人体感应模块检测到有人、或者声音传感器检测到有声音，则打开门口的灯。手动控制时，不管传感器是否检测到人或声音，可以直接开关灯。
   ② 刷RFID卡开关门，信息正确则打开房门，信息不正确不开门。
@@ -361,6 +362,7 @@ void setup() {
   mfrc522.PCD_Init(); // Init MFRC522 card
   init_wifi(WIFI_SSID, WIFI_PASSWD);//连接WiFi
   mqttClient.setCallback(mqtt_callback);//接收并处理来自阿里云IOT平台的消息
+  door.write(0);//舵机启动时复位
 }
 
 
@@ -380,6 +382,7 @@ void loop()
   {
     //Serial.println("Right Card,Open door!\n");
     doorControl(1);
+    delay(3000);
     doorControl(0);
     cardvalidity = 1;
     readID = "";
