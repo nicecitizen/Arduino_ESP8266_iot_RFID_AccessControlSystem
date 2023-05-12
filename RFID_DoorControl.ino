@@ -1,20 +1,20 @@
 /*
- ① 自动控制时，人体感应模块检测到有人、或者声音传感器检测到有声音，则打开门口的灯。手动控制时，不管传感器是否检测到人或声音，可以直接开关灯。
-② 刷RFID卡开关门，信息正确则打开房门，信息不正确不开门。
-（1）可以通过网页进行远程监控。
-（2）远程端分别设置：
-①本地控制/远程控制切换开关；
-②手动控制/自动控制切换开关；
-③远程手动控制时使用的设备总启动开关和总停止开关；设备端设置：本地手动控制时使用的设备总启动开关和总停止开关。
-设备端和远程端均需要直观显示当前设备的运行状况。本地控制时，远程端仅能进行监视、不能控制。
-本地控制分为手动控制和自动控制两种模式，当系统处于本地自动控制模式时，设备根据各传感器测量值和系统时间自动工作；
-当系统处于本地手动控制模式时，使用设备的手动输入元件和系统时间控制设备的动作。远程控制时，仅远程手动控制起作用、无远程自动控制模式。
-远程手动控制时，可以直观监视设备的运行状况，也可以通过网页遥控本地设备的动作。
+  ① 自动控制时，人体感应模块检测到有人、或者声音传感器检测到有声音，则打开门口的灯。手动控制时，不管传感器是否检测到人或声音，可以直接开关灯。
+  ② 刷RFID卡开关门，信息正确则打开房门，信息不正确不开门。
+  （1）可以通过网页进行远程监控。
+  （2）远程端分别设置：
+  ①本地控制/远程控制切换开关；
+  ②手动控制/自动控制切换开关；
+  ③远程手动控制时使用的设备总启动开关和总停止开关；设备端设置：本地手动控制时使用的设备总启动开关和总停止开关。
+  设备端和远程端均需要直观显示当前设备的运行状况。本地控制时，远程端仅能进行监视、不能控制。
+  本地控制分为手动控制和自动控制两种模式，当系统处于本地自动控制模式时，设备根据各传感器测量值和系统时间自动工作；
+  当系统处于本地手动控制模式时，使用设备的手动输入元件和系统时间控制设备的动作。远程控制时，仅远程手动控制起作用、无远程自动控制模式。
+  远程手动控制时，可以直观监视设备的运行状况，也可以通过网页遥控本地设备的动作。
 
- */
- /*阿里云平台思路：上传的数据：控制状态（自动还是手动），是否有人，灯的开关，卡的合法性
+*/
+/*阿里云平台思路：上传的数据：控制状态（自动还是手动），是否有人，灯的开关，卡的合法性
   操控：控制状态，开关灯
-  */
+*/
 //Head Files
 /*MACRO AND DEFINITION OF PIN AND GLOBAL VARIABLES*/
 #include <ESP8266WiFi.h>   //ESP8266 WiFi芯片使用的头文件
@@ -27,21 +27,29 @@
 #include "Servo.h"
 #define RST_PIN     5           // 配置针脚
 #define SS_PIN      4
-#define LED 0
-#define objDctSgn 15 //人体感应检测模块
-//#define ledBtn A0
-#define modeSwitchBtn 16 
+#define LED LED_BUILTIN //使用板载LED IO0
+#define objDctSgn 16 //人体感应检测模块
+#define ledBtn A0
+#define modeSwitchBtn 15
 #define doorPin 2
 MFRC522 mfrc522(SS_PIN, RST_PIN);   // 创建新的RFID实例
 MFRC522::MIFARE_Key key;
 Servo door;
-int MODE=0; //Auto:0,Manual:1
-int Detected=0; //Detected:1,Undetect:0
-int ledStatus=0;
-int cardvalidity=0; //for upload
-String legalID="2341346176";
-String readID="";
-
+int MODE = 0; //Auto:0,Manual:1
+int Detected = 0; //Detected:1,Undetect:0
+int ledStatus = 0;
+int remoteLED = 0; //用于解决远程控制LED（手动模式）后被按钮获取方法覆盖的问题
+int cardvalidity = 0; //for upload
+String legalID = "2341346176";
+String readID = "";
+//debunce
+unsigned long lastDebounceTime1 = 0;
+unsigned long lastDebounceTime2 = 0;
+unsigned long debounceDelay = 750;
+int lastBtn1 = 0;
+int lastBtn2 = 0;
+int currentBtn1 = 0;
+int currentBtn2 = 0;
 //macro fro Aliyun
 
 #define WIFI_SSID        "HUAWEI P40 Pro"//替换自己的WIFI，2.4GHz频段
@@ -63,9 +71,9 @@ unsigned long lastMs = 0;//用来保存上一次设备属性上报的时间
 
 WiFiClient   espClient;    //创建客户端，代表本地设备：带有WiFi模组的ESP8266开发板
 PubSubClient mqttClient(espClient);    //初始化构造器，代表本地设备将通过MQTT协议连接阿里云IoT平台
-byte upload_mode = 0;  //本地设备将要发布的数据之一    
-byte upload_detect=0; //本地设备将要发布的数据之二
-byte upload_cardvalidity=0;
+int upload_mode = 0;  //本地设备将要发布的数据之一
+int upload_detect = 0; //本地设备将要发布的数据之二
+int upload_cardvalidity = 0;
 
 //aliyun code
 //让ESP8266开发板能够接入WiFi网络
@@ -107,15 +115,39 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
     //解析JSON对象字符串，将JSON格式的payload消息拆分开
     JsonObject &root = jsonBuffer.parseObject(payload);
     // https://arduinojson.org/v5/assistant/  json数据解析网站
-    int params_LightSwitch = root["params"]["LightSwitch"];//完成解析后，可以直接读取params中的各个变量参数值
+    int params_LightSwitch = -1;
+    int params_ModeSwitch = -1;
+    params_LightSwitch = root["params"]["LightSwitch"];//完成解析后，可以直接读取params中的各个变量参数值
+    params_ModeSwitch = root["params"]["upload_mode"];
     //如果读到了所关心的变量，可以执行进一步的操作，这里是用LightSwitch变量开灯或关灯
-    if (params_LightSwitch == 1)
-    { Serial.println("led off");
-      digitalWrite(LED, LOW);
+    if (params_ModeSwitch == 1) //先切换模式再控制灯，防止出现同时更改灯和模式状态出现自动模式不能控制灯的情况
+    {
+      Serial.println("Switch to Manual Mode");
+      MODE = 1;
+    }
+    else if (params_ModeSwitch == 0)
+    {
+      Serial.println("Switch to Auto Mode");
+      MODE = 0;
+    }
+    if (MODE)
+    {
+      if (params_LightSwitch == 0)
+      {
+        Serial.println("led off");
+        digitalWrite(LED, 1);
+        remoteLED = 1;
+      }
+      else if (params_LightSwitch == 1)
+      {
+        Serial.println("led on");
+        digitalWrite(LED, 0);
+        remoteLED = 1;
+      }
     }
     else
-    { Serial.println("led on");
-      digitalWrite(LED, HIGH);
+    {
+      Serial.println("Now running at Auto Mode,DO NOT support mannual control LED light");
     }
 
     if (!root.success())//如果解析没成功，串口输出解析失败（parseObject() failed）
@@ -156,7 +188,7 @@ void mqtt_interval_post()
   char param[512];
   char jsonBuf[1024];//用来存放ESP8266将要PUBLISH到服务器的消息
 
-  sprintf(param, "{\"LightSwitch\":%d,\"CurrentMode\":%d,\"CardOk\":%d}", !digitalRead(LED), upload_mode, upload_cardvalidity); //将要上报的数据格式化后写入param字符串中
+  sprintf(param, "{\"LightSwitch\":%d,\"upload_mode\":%d,\"upload_cardvalidity\":%d,\"upload_detect\":%d}", !digitalRead(LED), upload_mode, upload_cardvalidity, upload_detect); //将要上报的数据格式化后写入param字符串中
   sprintf(jsonBuf, ALINK_BODY_FORMAT, ALINK_METHOD_PROP_POST, param);//将要上报的数据加上主题，一起被格式化成标准报文格式后，写入jsonBuf字符串中
   Serial.println(jsonBuf);//串口输出将要上传的报文
   mqttClient.publish(ALINK_TOPIC_PROP_POST, jsonBuf);//ESP8266向阿里云IOT平台PUBLISH（发布）消息，主题是ALINK_TOPIC_PROP_POST，消息内容是jsonBuf
@@ -165,31 +197,45 @@ void mqtt_interval_post()
 
 
 //function
-void ledControl() 
+void ledControl()
 {
-  /*
+
   if (MODE) //手动控制
   {
-    if (digitalRead(ledBtn)==0)
-      ledStatus^=1;
-    digitalWrite(LED,ledStatus);
+    //Serial.printf("AnalogRead LEDBTN %d\n",analogRead(ledBtn));
+    currentBtn2 = (analogRead(ledBtn) == 1024) ? 1 : 0;
+    if (currentBtn2 != lastBtn2)
+    {
+      if (millis() - lastDebounceTime2 > debounceDelay)
+      {
+        if (currentBtn2)
+        {
+          Serial.println("LED Control Button pressed");
+          ledStatus ^= 1;
+          remoteLED = 0;
+        }
+        lastDebounceTime2 = millis();
+      }
+    }
+    if (!remoteLED)
+      digitalWrite(LED, !ledStatus);
   }
-  else*/
-    digitalWrite(LED,Detected);
+  else
+    digitalWrite(LED, !Detected);
 }
 
 void doorControl(int op)
 {
-  int pos=0;
-  int cur=door.read();
+  int pos = 0;
+  int cur = door.read();
   if (op) //开门
   {
-    if (cur>=90)
+    if (cur >= 90)
     {
       Serial.println("Door has already been opened! ");
       return ;
     }
-    for (pos=cur;pos<=90;pos++)
+    for (pos = cur; pos <= 90; pos++)
     {
       door.write(pos);
       delay(10);
@@ -197,12 +243,12 @@ void doorControl(int op)
   }
   else
   {
-    if (cur<=0)
+    if (cur <= 0)
     {
       Serial.println("Door has already been closed! ");
       return ;
     }
-    for (pos=cur;pos>=0;pos--)
+    for (pos = cur; pos >= 0; pos--)
     {
       door.write(pos);
       delay(10);
@@ -211,7 +257,7 @@ void doorControl(int op)
 }
 void readCard()
 {
-    // 寻找新卡
+  // 寻找新卡
   if ( ! mfrc522.PICC_IsNewCardPresent()) {
     //Serial.println("没有找到卡");
     return;
@@ -255,13 +301,13 @@ void readCard()
 /**
    将字节数组转储为串行的十六进制值
 */
-void dump_byte_array(byte *buffer, byte bufferSize) 
+void dump_byte_array(byte *buffer, byte bufferSize)
 {
-  readID="";
-  for (byte i = 0; i < bufferSize; i++) 
+  readID = "";
+  for (byte i = 0; i < bufferSize; i++)
   {
     //将uid转成字符串
-    readID+=buffer[i];
+    readID += buffer[i];
     Serial.print(buffer[i] < 0x10 ? " 0" : " ");
     Serial.print(buffer[i], HEX);
   }
@@ -271,28 +317,46 @@ void dump_byte_array(byte *buffer, byte bufferSize)
 
 void aliyunUpload()//在loop中上传数据
 {
-    if (millis() - lastMs >= 5000)  //每5秒读取一次本地数据
+  if (millis() - lastMs >= 5000)  //每5秒读取一次本地数据
   {
     lastMs = millis();
 
     mqtt_check_connect();//连接阿里云IOT平台
     //将进行格式转换并串口显示
-    upload_mode=MODE;
-    upload_cardvalidity=cardvalidity;
+    upload_mode = MODE;
+    upload_cardvalidity = cardvalidity;
+    upload_detect = Detected;
     mqtt_interval_post();//ESP8266向阿里云IOT平台上报本地数据
   }
 
   mqttClient.loop();
+}
+
+void modeSwitch()
+{
+  currentBtn1 = digitalRead(modeSwitchBtn);
+  if (lastBtn1 != currentBtn1) //模式切换按钮被按下，切换模式
+  {
+    if (millis() - lastDebounceTime1 > debounceDelay)
+    {
+      if (currentBtn1)
+      {
+        //Serial.println("ModeSwitchButton Pressed");
+        MODE ^= 1;
+      }
+      lastDebounceTime1 = millis();
+    }
+  }
 }
 //main function
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
   door.attach(doorPin);
-  pinMode(objDctSgn,INPUT); //人体感应检测信号
-  //pinMode(ledBtn,INPUT); //手动控制下开关灯按钮
-  pinMode(modeSwitchBtn,INPUT);//模式切换按钮
-  pinMode(LED,OUTPUT);
+  pinMode(objDctSgn, INPUT); //人体感应检测信号
+  pinMode(ledBtn, INPUT); //手动控制下开关灯按钮
+  pinMode(modeSwitchBtn, INPUT); //模式切换按钮
+  pinMode(LED, OUTPUT);
   SPI.begin();        // SPI开始
   mfrc522.PCD_Init(); // Init MFRC522 card
   init_wifi(WIFI_SSID, WIFI_PASSWD);//连接WiFi
@@ -300,29 +364,29 @@ void setup() {
 }
 
 
-void loop() 
+void loop()
 {
   // put your main code here, to run repeatedly:
-  if (digitalRead(modeSwitchBtn)==1) //模式切换按钮被按下，切换模式
-    MODE^=1;
-  Detected=digitalRead(objDctSgn);
+  modeSwitch();
+  Detected = digitalRead(objDctSgn);
   //Serial.println("MODE(0 for auto): ");
   //Serial.printf(" %d\n ",MODE);
   //Serial.println("ObjDct(1 for detected) ");
   //Serial.printf("%d\n",Detected);
   ledControl();
+  // test digitalWrite(LED,!Detected);
   readCard();
-  if (readID==legalID)
+  if (readID == legalID)
   {
     //Serial.println("Right Card,Open door!\n");
     doorControl(1);
     doorControl(0);
-    cardvalidity=1;
-    readID="";
+    cardvalidity = 1;
+    readID = "";
   }
   else
   {
-    cardvalidity=0;
+    cardvalidity = 0;
     //Serial.println("Card Not Match!\n");
   }
   aliyunUpload();
