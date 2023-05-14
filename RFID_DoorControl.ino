@@ -46,6 +46,8 @@ int cardvalidity = 0; //for upload
 int doorOpen = 0; //解决因为舵机延迟归位导致延迟上传开门状态的问题
 String legalID = "2341346176";
 String readID = "";
+String legalPwd = "default";
+String inputPwd = "";
 //debunce
 unsigned long lastDebounceTime1 = 0;
 unsigned long lastDebounceTime2 = 0;
@@ -121,6 +123,19 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
     // https://arduinojson.org/v5/assistant/  json数据解析网站
     int params_LightSwitch = root["params"]["LightSwitch"] | -1; //完成解析后，可以直接读取params中的各个变量参数值
     int params_ModeSwitch = root["params"]["upload_mode"] | -1;
+    String params_legalPwd = root["params"]["legal_pwd"] ;
+    String params_inputPwd = root["params"]["input_pwd"] ;
+    if (params_legalPwd.length() > 0)
+      legalPwd = params_legalPwd;
+    else if (!params_inputPwd.length())
+      Serial.println("设置密码为空请重新输入");
+    if (params_inputPwd.length() > 0)
+    {
+      inputPwd = params_inputPwd;
+      Serial.printf("%s %s\n", inputPwd, legalPwd);
+    }
+    else if (!params_legalPwd.length())
+      Serial.println("输入密码为空请重新输入");
     //如果读到了所关心的变量，可以执行进一步的操作，这里是用LightSwitch变量开灯或关灯
     if (params_ModeSwitch == 1) //先切换模式再控制灯，防止出现同时更改灯和模式状态出现自动模式不能控制灯的情况
     {
@@ -135,7 +150,7 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
     if (!MODE)
     {
       MODE = 1;
-      Serial.println("Switch to Manual Mode due to control on LED");
+      Serial.println("Switch to Manual Mode due to control remotely");
     }
     if (params_LightSwitch == 0)
     {
@@ -351,9 +366,9 @@ void modeSwitch()
 void accessControl()
 {
   readCard();
-  if (readID == legalID)
+  if (readID == legalID || legalPwd == inputPwd)
   {
-    //Serial.println("Right Card,Open door!\n");
+    Serial.println("OK,Open door!\n");
     cardvalidity = 1;
     doorOpen = 1;
     aliyunUpload();
@@ -362,6 +377,7 @@ void accessControl()
     delay(3000);
     doorControl(0);
     readID = "";
+    inputPwd = "";
   }
   else
   {
