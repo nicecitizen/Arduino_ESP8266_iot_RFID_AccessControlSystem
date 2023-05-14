@@ -1,4 +1,6 @@
 /*v1.02版本更新：增加了舵机在启动时复位成关门状态的改进，并增加开门停留时间*/
+/*v1.03:修复了网页控制时因为只发送当前操作对象数值而引发的JSON解析导致功能紊乱BUG和，并缩短网络端刷新时间*/
+/*TODO:门开关状态显示太短的BUG，并增加刷不符合的卡的报警。Further:密码开锁*/
 /*
   ① 自动控制时，人体感应模块检测到有人、或者声音传感器检测到有声音，则打开门口的灯。手动控制时，不管传感器是否检测到人或声音，可以直接开关灯。
   ② 刷RFID卡开关门，信息正确则打开房门，信息不正确不开门。
@@ -41,6 +43,7 @@ int Detected = 0; //Detected:1,Undetect:0
 int ledStatus = 0;
 int remoteLED = 0; //用于解决远程控制LED（手动模式）后被按钮获取方法覆盖的问题
 int cardvalidity = 0; //for upload
+int doorOpen = 0; //解决因为舵机延迟归位导致延迟上传开门状态的问题
 String legalID = "2341346176";
 String readID = "";
 //debunce
@@ -116,10 +119,8 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
     //解析JSON对象字符串，将JSON格式的payload消息拆分开
     JsonObject &root = jsonBuffer.parseObject(payload);
     // https://arduinojson.org/v5/assistant/  json数据解析网站
-    int params_LightSwitch = -1;
-    int params_ModeSwitch = -1;
-    params_LightSwitch = root["params"]["LightSwitch"];//完成解析后，可以直接读取params中的各个变量参数值
-    params_ModeSwitch = root["params"]["upload_mode"];
+    int params_LightSwitch = root["params"]["LightSwitch"] | -1; //完成解析后，可以直接读取params中的各个变量参数值
+    int params_ModeSwitch = root["params"]["upload_mode"] | -1;
     //如果读到了所关心的变量，可以执行进一步的操作，这里是用LightSwitch变量开灯或关灯
     if (params_ModeSwitch == 1) //先切换模式再控制灯，防止出现同时更改灯和模式状态出现自动模式不能控制灯的情况
     {
@@ -131,24 +132,22 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
       Serial.println("Switch to Auto Mode");
       MODE = 0;
     }
-    if (MODE)
+    if (!MODE)
     {
-      if (params_LightSwitch == 0)
-      {
-        Serial.println("led off");
-        digitalWrite(LED, 1);
-        remoteLED = 1;
-      }
-      else if (params_LightSwitch == 1)
-      {
-        Serial.println("led on");
-        digitalWrite(LED, 0);
-        remoteLED = 1;
-      }
+      MODE = 1;
+      Serial.println("Switch to Manual Mode due to control on LED");
     }
-    else
+    if (params_LightSwitch == 0)
     {
-      Serial.println("Now running at Auto Mode,DO NOT support mannual control LED light");
+      Serial.println("led off");
+      digitalWrite(LED, 1);
+      remoteLED = 1;
+    }
+    else if (params_LightSwitch == 1)
+    {
+      Serial.println("led on");
+      digitalWrite(LED, 0);
+      remoteLED = 1;
     }
 
     if (!root.success())//如果解析没成功，串口输出解析失败（parseObject() failed）
@@ -318,7 +317,7 @@ void dump_byte_array(byte *buffer, byte bufferSize)
 
 void aliyunUpload()//在loop中上传数据
 {
-  if (millis() - lastMs >= 5000)  //每5秒读取一次本地数据
+  if (millis() - lastMs >= 1000 || doorOpen) //每5秒读取一次本地数据
   {
     lastMs = millis();
 
@@ -349,6 +348,27 @@ void modeSwitch()
     }
   }
 }
+void accessControl()
+{
+  readCard();
+  if (readID == legalID)
+  {
+    //Serial.println("Right Card,Open door!\n");
+    cardvalidity = 1;
+    doorOpen = 1;
+    aliyunUpload();
+    doorOpen = 0;
+    doorControl(1);
+    delay(3000);
+    doorControl(0);
+    readID = "";
+  }
+  else
+  {
+    cardvalidity = 0;
+    //Serial.println("Card Not Match!\n");
+  }
+}
 //main function
 void setup() {
   // put your setup code here, to run once:
@@ -377,20 +397,6 @@ void loop()
   //Serial.printf("%d\n",Detected);
   ledControl();
   // test digitalWrite(LED,!Detected);
-  readCard();
-  if (readID == legalID)
-  {
-    //Serial.println("Right Card,Open door!\n");
-    doorControl(1);
-    delay(3000);
-    doorControl(0);
-    cardvalidity = 1;
-    readID = "";
-  }
-  else
-  {
-    cardvalidity = 0;
-    //Serial.println("Card Not Match!\n");
-  }
+  accessControl();
   aliyunUpload();
 }
