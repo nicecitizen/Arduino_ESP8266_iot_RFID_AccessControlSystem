@@ -122,7 +122,7 @@ void mqtt_callback(char *topic, byte *payload, unsigned int length)
     JsonObject &root = jsonBuffer.parseObject(payload);
     // https://arduinojson.org/v5/assistant/  json数据解析网站
     int params_LightSwitch = root["params"]["LightSwitch"] | -1; //完成解析后，可以直接读取params中的各个变量参数值
-    int params_ModeSwitch = root["params"]["upload_mode"] | -1;
+    int params_ModeSwitch = root["params"]["upload_mode"] | -1;//默认赋值问题非常重要
     String params_legalPwd = root["params"]["legal_pwd"] ;
     String params_inputPwd = root["params"]["input_pwd"] ;
     if (params_legalPwd.length() > 0)
@@ -236,10 +236,10 @@ void ledControl()
       digitalWrite(LED, !ledStatus);
   }
   else
-    digitalWrite(LED, !Detected);
+    digitalWrite(LED, !Detected);//自动模式直接根据传感器返回的信号控制灯
 }
 
-void doorControl(int op)
+void doorControl(int op)//0关门，1开门
 {
   int pos = 0;
   int cur = door.read();
@@ -287,7 +287,7 @@ void readCard()
 
   // 显示卡片的详细信息
   Serial.print(F("卡片 UID:"));
-  dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);
+  dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);//将卡的UID转换成字符串
   Serial.println();
   Serial.print(F("卡片类型: "));
   MFRC522::PICC_Type piccType = mfrc522.PICC_GetType(mfrc522.uid.sak);
@@ -332,10 +332,9 @@ void dump_byte_array(byte *buffer, byte bufferSize)
 
 void aliyunUpload()//在loop中上传数据
 {
-  if (millis() - lastMs >= 1000 || doorOpen) //每5秒读取一次本地数据
+  if (millis() - lastMs >= 1000 || doorOpen) //每1秒读取一次本地数据或强制上传
   {
     lastMs = millis();
-
     mqtt_check_connect();//连接阿里云IOT平台
     //将进行格式转换并串口显示
     upload_mode = MODE;
@@ -343,7 +342,6 @@ void aliyunUpload()//在loop中上传数据
     upload_detect = Detected;
     mqtt_interval_post();//ESP8266向阿里云IOT平台上报本地数据
   }
-
   mqttClient.loop();
 }
 
@@ -366,16 +364,17 @@ void modeSwitch()
 void accessControl()
 {
   readCard();
-  if (readID == legalID || legalPwd == inputPwd)
+  if (readID == legalID || legalPwd == inputPwd)//两种方式开门
   {
     Serial.println("OK,Open door!\n");
     cardvalidity = 1;
-    doorOpen = 1;
-    aliyunUpload();
-    doorOpen = 0;
-    doorControl(1);
-    delay(3000);
-    doorControl(0);
+    doorOpen = 1;//解决因为开门状态延迟导致的物联网上传延迟
+    aliyunUpload();//解决延迟在这里忽略间隔强制上传
+    doorOpen = 0; 
+    doorControl(1); //开门
+    delay(3000);//开门状态保持3秒
+    doorControl(0);//关门
+    //读取的卡ID字符串和密码清零
     readID = "";
     inputPwd = "";
   }
